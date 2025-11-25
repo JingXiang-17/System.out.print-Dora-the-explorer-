@@ -291,107 +291,62 @@ else:
     model.fit(X_train, y_train)
 
 # ==============================
-# 6️⃣ LOAD FUTURE FLIGHT CSV (AUTO-DETECT COLUMNS)
+# 6️⃣ SINGLE-FILE FUTURE ROWS (use the same uploaded CSV for future schedules)
 # ==============================
 
-from tkinter import Tk
-from tkinter.filedialog import askopenfilename
+# Single-file mode: do not load a second CSV. Use the original file specified
+# by `file_path` (or the in-memory `df`) to find scheduled/future rows.
 
-#syntax to let user upload csv
-"""
-# Hide the Tkinter root window
-Tk().withdraw()
 
-# File selection dialog
-file_path_future = askopenfilename(
-    title="Select CSV file with future flights",
-    filetypes=[("CSV Files", "*.csv")]
-)
+# --- Replace separate future-CSV logic: use the same uploaded CSV used for training ---
+# Read the original training CSV path (`file_path`) to find scheduled rows (missing ARRIVAL_DELAY)
+try:
+    full_df = pd.read_csv(file_path)
+    full_df.columns = full_df.columns.str.upper()
+except Exception:
+    # fallback to in-memory historical dataframe if reading fails
+    full_df = df.copy()
 
-if not file_path_future:
-    raise SystemExit("No file selected. Exiting...")
+# Ensure DATE_STD exists on full_df
+if "DATE_STD" not in full_df.columns:
+    if "DATE" in full_df.columns:
+        full_df["DATE_STD"] = pd.to_datetime(full_df["DATE"], errors="coerce")
+    elif all(c in full_df.columns for c in ["YEAR", "MONTH", "DAY"]):
+        full_df["DATE_STD"] = pd.to_datetime(full_df[["YEAR", "MONTH", "DAY"]].rename(columns={"YEAR":"year","MONTH":"month","DAY":"day"}), errors="coerce")
 
-# Load the CSV
-user_df = pd.read_csv(file_path_future)
-"""
-#syntax to test
-file_path_future = r"filtered_500_rows.csv"
+# Normalize and build ROUTE on full_df
+if "ORIGIN_AIRPORT" in full_df.columns and "DESTINATION_AIRPORT" in full_df.columns:
+    full_df["ORIGIN_AIRPORT"] = full_df["ORIGIN_AIRPORT"].astype(str).str.upper()
+    full_df["DESTINATION_AIRPORT"] = full_df["DESTINATION_AIRPORT"].astype(str).str.upper()
+    full_df["ROUTE"] = full_df["ORIGIN_AIRPORT"] + "-" + full_df["DESTINATION_AIRPORT"]
 
-# Load test CSV
-user_df = pd.read_csv(file_path_future)
-print(f"[TEST MODE] Loaded future flight CSV: {file_path_future}")
+if "AIRLINE" in full_df.columns:
+    full_df["AIRLINE"] = full_df["AIRLINE"].astype(str).str.upper()
 
-print(f"Loaded future flight CSV: {file_path_future}")
-print("\nFuture CSV columns detected:", user_df.columns.tolist())
-
-# Normalize column names (standard uppercase without symbols)
-user_df.columns = (
-    user_df.columns
-        .str.upper()
-        .str.replace(r"[^A-Z0-9]", "", regex=True)
-)
-
-from rapidfuzz import fuzz, process
-
-def auto_find(keyword, columns):
-    match, score, _ = process.extractOne(keyword, columns, scorer=fuzz.WRatio)
-    return match if score >= 70 else None
-
-# ----------------------------
-# AUTO-DETECT COLUMNS
-# ----------------------------
-date_col_future = auto_find("DATE", user_df.columns)
-
-year_col = auto_find("YEAR", user_df.columns)
-month_col = auto_find("MONTH", user_df.columns)
-day_col = auto_find("DAY", user_df.columns)
-
-airline_col_future = auto_find("AIRLINECARRIER", user_df.columns)
-
-origin_col = auto_find("ORIGINAIRPORT", user_df.columns)
-dest_col   = auto_find("DESTINATIONAIRPORT", user_df.columns)
-# Standardize to required column names
-if origin_col:
-    user_df["ORIGIN_AIRPORT"] = user_df[origin_col].astype(str)
+# Find scheduled rows in the same CSV matching airline+route (ARRIVAL_DELAY is NaN)
+if "ARRIVAL_DELAY" in full_df.columns:
+    matching_user_rows = full_df[(full_df["AIRLINE"] == AIRLINE_TO_USE) & (full_df["ROUTE"] == ROUTE_TO_USE) & (full_df["ARRIVAL_DELAY"].isna())]
 else:
-    raise ValueError("Could not detect origin airport column.")
+    matching_user_rows = full_df[(full_df.get("AIRLINE", "").str.upper() == AIRLINE_TO_USE) & (full_df.get("ROUTE", "") == ROUTE_TO_USE)].copy()
 
-if dest_col:
-    user_df["DESTINATION_AIRPORT"] = user_df[dest_col].astype(str)
+if matching_user_rows.empty:
+    print(f"\nNo scheduled/future rows found in uploaded CSV for {AIRLINE_TO_USE} {ROUTE_TO_USE} — falling back to last historical row.")
+    df_to_predict_on = df.tail(1).copy()
+    using_user_input = False
 else:
-    raise ValueError("Could not detect destination airport column.")
+    print(f"\nUsing {len(matching_user_rows)} scheduled rows from the uploaded CSV for prediction.")
+    df_to_predict_on = matching_user_rows.copy()
+    using_user_input = True
 
-
-arrival_col_future = auto_find("ARRIVALDELAY", user_df.columns)
-
-# ----------------------------
-# BUILD STANDARDIZED COLUMNS
-# ----------------------------
-# DATE
-if date_col_future:
-    user_df["DATE_STD"] = pd.to_datetime(user_df[date_col_future], errors="coerce")
-
-elif year_col and month_col and day_col:
-    ren = {year_col: "year", month_col: "month", day_col: "day"}
-    user_df["DATE_STD"] = pd.to_datetime(user_df[[year_col, month_col, day_col]].rename(columns=ren), errors="coerce")
-else:
-    raise ValueError("Could not detect DATE or YEAR/MONTH/DAY columns.")
-
-# ROUTE
-if origin_col and dest_col:
-    user_df["ROUTE"] = user_df[origin_col].astype(str) + "-" + user_df[dest_col].astype(str)
-else:
-    raise ValueError("Could not detect ORIGIN or DESTINATION columns.")
-
-# AIRLINE
-if airline_col_future:
-    user_df["AIRLINE"] = user_df[airline_col_future]
-else:
-    raise ValueError("Could not detect AIRLINE column.")
-
-print("\nMapped future CSV preview:")
-print(user_df.head())
-
+# Ensure encoded columns exist for prediction rows
+if "AIRLINE_ENCODED" not in df_to_predict_on.columns or "ROUTE_ENCODED" not in df_to_predict_on.columns:
+    if not df.empty:
+        hist_ref = df.iloc[-1]
+        df_to_predict_on["AIRLINE_ENCODED"] = df_to_predict_on.get("AIRLINE_ENCODED", hist_ref.get("AIRLINE_ENCODED", 0))
+        df_to_predict_on["ROUTE_ENCODED"] = df_to_predict_on.get("ROUTE_ENCODED", hist_ref.get("ROUTE_ENCODED", 0))
+    else:
+        df_to_predict_on["AIRLINE_ENCODED"] = df_to_predict_on.get("AIRLINE_ENCODED", 0)
+        df_to_predict_on["ROUTE_ENCODED"] = df_to_predict_on.get("ROUTE_ENCODED", 0)
 
 # ==============================
 # 7️⃣ ASK USER FOR FORECAST DAYS
@@ -406,66 +361,7 @@ if days_env:
         days = int(input("How many future days to forecast? "))
 else:
     days = int(input("How many future days to forecast? "))
-# ==============================
-# SAFELY HANDLE FUTURE CSV MATCHING
-# ==============================
-
-# Normalize case
-user_df["AIRLINE"] = user_df["AIRLINE"].str.upper()
-user_df["ORIGIN_AIRPORT"] = user_df["ORIGIN_AIRPORT"].str.upper()
-user_df["DESTINATION_AIRPORT"] = user_df["DESTINATION_AIRPORT"].str.upper()
-
-# Create route string
-user_df["ROUTE"] = user_df["ORIGIN_AIRPORT"] + "-" + user_df["DESTINATION_AIRPORT"]
-
-# Find rows in user CSV matching chosen airline + route
-matching_user_rows = user_df[
-    (user_df["AIRLINE"] == AIRLINE_TO_USE) &
-    (user_df["ROUTE"] == ROUTE_TO_USE)
-]
-
-if matching_user_rows.empty:
-    print("\n⚠️ No matching rows in user's CSV for:")
-    print(f"   Airline: {AIRLINE_TO_USE}")
-    print(f"   Route:   {ROUTE_TO_USE}")
-    print("➡ Using historical-only forecasting instead.\n")
-
-    # Use last row of historical training data from the preserved historical copy
-    df_to_predict_on = df_hist_all[(df_hist_all["AIRLINE"] == AIRLINE_TO_USE) & (df_hist_all["ROUTE"] == ROUTE_TO_USE)].tail(1).copy()
-    if df_to_predict_on.empty:
-        df_to_predict_on = df_hist_all.tail(1).copy()
-    using_user_input = False
-else:
-    print("\n✓ Matching rows found in user's CSV. Using user-provided future flights.\n")
-    df_to_predict_on = matching_user_rows.copy()
-    using_user_input = True
-# ---------------------------------------------------
-# FIX: Add encoded columns to user-supplied future CSV
-# Use a safe historical reference (prefer processed df, else fallback to raw historical data)
-# ---------------------------------------------------
-if df.shape[0] > 0:
-    hist_ref = df.iloc[-1]
-else:
-    # try to find a matching row in the full historical data copy
-    hist_candidates = df_hist_all
-    try:
-        hist_candidates = df_hist_all[(df_hist_all["AIRLINE"] == AIRLINE_TO_USE) & (df_hist_all["ROUTE"] == ROUTE_TO_USE)]
-    except Exception:
-        hist_candidates = df_hist_all
-
-    if not hist_candidates.empty:
-        if "DATE_STD" in hist_candidates.columns:
-            hist_ref = hist_candidates.sort_values("DATE_STD").iloc[-1]
-        else:
-            hist_ref = hist_candidates.iloc[-1]
-    else:
-        if "DATE_STD" in df_hist_all.columns:
-            hist_ref = df_hist_all.sort_values("DATE_STD").iloc[-1]
-        else:
-            hist_ref = df_hist_all.iloc[-1]
-
-df_to_predict_on["AIRLINE_ENCODED"] = hist_ref.get("AIRLINE_ENCODED", 0)
-df_to_predict_on["ROUTE_ENCODED"]   = hist_ref.get("ROUTE_ENCODED", 0)
+# (future matching handled above using the single uploaded CSV)
 
 # ==============================
 # 8️⃣ FORECAST FUNCTIONS (FIXED)
@@ -480,29 +376,58 @@ def forecast_future_days_prophet(df, airline, route, n_days=365):
     df_target = df_target.rename(columns={"DATE_STD":"ds","ARRIVAL_DELAY":"y"})
     # Aggregate by day to produce a single time series point per day
     df_target = df_target.groupby("ds", as_index=False)["y"].mean().sort_values("ds")
+    # Robustify Prophet input: winsorize historical y to remove extreme outliers and
+    # use logistic growth with cap/floor derived from historical percentiles. This
+    # prevents explosive extrapolation and produces more realistic forecasts.
+    lo_pct = float(os.environ.get("PROPHET_INPUT_LO_PCT", "0.01"))
+    hi_pct = float(os.environ.get("PROPHET_INPUT_HI_PCT", "0.99"))
+    y_lo = df_target["y"].quantile(lo_pct)
+    y_hi = df_target["y"].quantile(hi_pct)
 
-    # Build Prophet with reduced trend flexibility to avoid extreme extrapolation
-    model = Prophet(daily_seasonality=False, yearly_seasonality=True, weekly_seasonality=True,
-                    changepoint_prior_scale=0.05)
-    model.add_seasonality(name='daily', period=1, fourier_order=3)
-    model.fit(df_target)
+    # winsorize
+    df_target["y"] = df_target["y"].clip(lower=y_lo, upper=y_hi)
+
+    # Use logistic growth with cap/floor set to historical percentiles
+    df_target["cap"] = y_hi
+    df_target["floor"] = y_lo
+
+    cps = float(os.environ.get("PROPHET_CHANGPOINT_PRIOR_SCALE", "0.01"))
+    model = Prophet(growth='logistic', daily_seasonality=False, yearly_seasonality=True, weekly_seasonality=True,
+                    changepoint_prior_scale=cps)
+    try:
+        model.fit(df_target)
+    except Exception:
+        # Fallback: try without logistic growth if that fails
+        model = Prophet(daily_seasonality=False, yearly_seasonality=True, weekly_seasonality=True,
+                        changepoint_prior_scale=cps)
+        model.fit(df_target.rename(columns={"cap":"cap"}))
 
     future = model.make_future_dataframe(periods=n_days)
+    # ensure cap/floor exist on future for logistic growth
+    if "cap" in df_target.columns:
+        future["cap"] = y_hi
+    if "floor" in df_target.columns:
+        future["floor"] = y_lo
+
     forecast = model.predict(future)
 
-    result = forecast[["ds","yhat"]].tail(n_days).rename(columns={"ds":"DATE_STD","yhat":"PREDICTED_DELAY"})
+    # Preserve raw Prophet output
+    raw = forecast[["ds","yhat"]].tail(n_days).rename(columns={"ds":"DATE_STD","yhat":"yhat_raw"}).reset_index(drop=True)
 
-    # Clip predictions to reasonable historical-based bounds to avoid absurd values
-    hist_mean = df_target["y"].mean()
-    hist_std = df_target["y"].std()
-    if np.isnan(hist_std) or hist_std == 0:
-        hist_std = max(1.0, abs(hist_mean) * 0.1)
+    # Clip by robust percentiles (less likely to collapse all values)
+    lo_q = float(os.environ.get("PROPHET_CLIP_LO", "0.01"))
+    hi_q = float(os.environ.get("PROPHET_CLIP_HI", "0.99"))
+    lower = df_target["y"].quantile(lo_q)
+    upper = df_target["y"].quantile(hi_q)
 
-    lower = hist_mean - 3 * hist_std
-    upper = hist_mean + 3 * hist_std
+    raw["PREDICTED_DELAY"] = raw["yhat_raw"].clip(lower=lower, upper=upper)
 
-    result["PREDICTED_DELAY"] = result["PREDICTED_DELAY"].clip(lower=lower, upper=upper)
-    return result
+    # Diagnostics
+    print(f"Prophet raw yhat min/max: {raw['yhat_raw'].min():.3f}/{raw['yhat_raw'].max():.3f}")
+    print(f"Input winsorize bounds: {y_lo:.3f}/{y_hi:.3f}; Clipping bounds: {lower:.3f}/{upper:.3f}")
+    print(f"Rows clipped to lower: {(raw['yhat_raw'] < lower).sum()}, to upper: {(raw['yhat_raw'] > upper).sum()}")
+
+    return raw[["DATE_STD","PREDICTED_DELAY","yhat_raw"]]
 
 
 def forecast_future_days(df, model, feature_cols, airline, route, n_days=365):
@@ -626,15 +551,45 @@ threshold_for_forecast = df["ARRIVAL_DELAY"].mean() + df["ARRIVAL_DELAY"].std()
 def detect_future_risks(forecast_df, threshold, hist_df=None):
     df = forecast_df.copy()
 
-    df["RISK"] = df["PREDICTED_DELAY"] > threshold
+    # Use historical dataframe if not provided (falls back to df_hist_all if we have it)
+    if hist_df is None:
+        hist_df = globals().get("df_hist_all", None)
 
-    # static factors to check for explanations (common causes)
+    if hist_df is not None and "ARRIVAL_DELAY" in hist_df.columns:
+        hist_mean = hist_df["ARRIVAL_DELAY"].mean()
+        hist_std = hist_df["ARRIVAL_DELAY"].std()
+    else:
+        hist_mean = 0.0
+        hist_std = 1.0
+
+    # Configurable multiplier for negative (early arrival) anomaly threshold
+    try:
+        neg_k = float(os.environ.get("RISK_NEG_K", "3"))
+    except Exception:
+        neg_k = 3.0
+
+    neg_threshold = hist_mean - (neg_k * hist_std)
+
+    # New rule: flag any positive predicted delay (>0). Flag large early arrivals only when
+    # predicted < neg_threshold (i.e., much earlier than historical mean by neg_k stddevs).
+    def flag_pred(p):
+        try:
+            p = float(p)
+        except Exception:
+            return False
+        if p > 0:
+            return True
+        if p < neg_threshold:
+            return True
+        return False
+
+    df["RISK"] = df["PREDICTED_DELAY"].apply(flag_pred)
+
     static_factors = [
         "WEATHER_DELAY", "AIR_SYSTEM_DELAY", "SECURITY_DELAY",
         "AIRLINE_DELAY", "LATE_AIRCRAFT_DELAY", "DEPARTURE_DELAY"
     ]
 
-    # compute historical medians for comparison if hist_df provided
     hist_medians = {}
     if hist_df is not None:
         for f in static_factors:
@@ -648,7 +603,6 @@ def detect_future_risks(forecast_df, threshold, hist_df=None):
             val = row.get(f, None)
             if val is None:
                 continue
-            # consider as contributing if positive or above historical median (if available)
             if val > 0:
                 reasons.append(f)
             else:
@@ -658,7 +612,12 @@ def detect_future_risks(forecast_df, threshold, hist_df=None):
 
         reasons = list(dict.fromkeys(reasons))
 
-        base_msg = f"Predicted delay ~{pred:.0f} minutes."
+        # Use different wording for early-arrival risks
+        if row.get("PREDICTED_DELAY", 0) < 0 and row.get("RISK", False):
+            base_msg = f"Predicted early arrival ~{abs(row.get('PREDICTED_DELAY',0)):.0f} minutes."
+        else:
+            base_msg = f"Predicted delay ~{row.get('PREDICTED_DELAY',0):.0f} minutes."
+
         if reasons:
             return base_msg + " Likely contributing factors: " + ", ".join(reasons)
         else:
@@ -671,6 +630,8 @@ def detect_future_risks(forecast_df, threshold, hist_df=None):
 # ==============================
 # 10️⃣ GENERATE FORECAST
 # ==============================
+min_hist_days = int(os.environ.get("PROPHET_MIN_HISTORY_DAYS", "30"))
+
 if days < 15:
     forecast_result = forecast_future_days(
         df_to_predict_on,
@@ -682,12 +643,65 @@ if days < 15:
     )
 
 else:
-    forecast_result = forecast_future_days_prophet(
-        df,
-        AIRLINE_TO_USE,
-        ROUTE_TO_USE,
-        n_days=days
-    )
+    # Check whether we have enough historical days for Prophet; if not, fall back to the
+    # iterative XGBoost-based generator which tends to be more stable on short histories.
+    hist_for_prophet = df[(df["AIRLINE"] == AIRLINE_TO_USE) & (df["ROUTE"] == ROUTE_TO_USE)][["DATE_STD","ARRIVAL_DELAY"]].dropna()
+    unique_days = hist_for_prophet["DATE_STD"].nunique()
+    if unique_days < min_hist_days:
+        print(f"Insufficient history for Prophet ({unique_days} days < {min_hist_days}). Falling back to iterative forecast.")
+        forecast_result = forecast_future_days(
+            df_to_predict_on,
+            model,
+            feature_cols,
+            AIRLINE_TO_USE,
+            ROUTE_TO_USE,
+            n_days=days
+        )
+    else:
+        forecast_result = forecast_future_days_prophet(
+            df,
+            AIRLINE_TO_USE,
+            ROUTE_TO_USE,
+            n_days=days
+        )
+
+        # Safety check: if Prophet produced extreme raw values or collapsed to a single clipped
+        # value, fallback to the iterative XGBoost generator which is more stable on odd trends.
+        try:
+            hist_std_check = df["ARRIVAL_DELAY"].std()
+            if np.isnan(hist_std_check) or hist_std_check == 0:
+                hist_std_check = 1.0
+
+            is_extreme = False
+            if "yhat_raw" in forecast_result.columns:
+                max_abs = forecast_result["yhat_raw"].abs().max()
+                if max_abs > (10 * hist_std_check):
+                    is_extreme = True
+
+            # Collapsed predictions (all equal) often mean clipping collapsed everything
+            collapsed = forecast_result["PREDICTED_DELAY"].nunique() <= 1
+
+            if is_extreme or collapsed:
+                print("Prophet produced extreme or collapsed forecasts — falling back to iterative XGBoost forecast.")
+                forecast_result = forecast_future_days(
+                    df_to_predict_on,
+                    model,
+                    feature_cols,
+                    AIRLINE_TO_USE,
+                    ROUTE_TO_USE,
+                    n_days=days
+                )
+        except Exception:
+            # If anything goes wrong in the safeguard, prefer iterative generator to avoid catastrophes
+            print("Error evaluating Prophet output; falling back to iterative forecast.")
+            forecast_result = forecast_future_days(
+                df_to_predict_on,
+                model,
+                feature_cols,
+                AIRLINE_TO_USE,
+                ROUTE_TO_USE,
+                n_days=days
+            )
 
 print(f"\n===== {days}-DAY FLIGHT DELAY FORECAST =====")
 print(forecast_result)
