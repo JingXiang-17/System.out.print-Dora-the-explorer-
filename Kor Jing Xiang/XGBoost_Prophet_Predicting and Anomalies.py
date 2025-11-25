@@ -696,3 +696,25 @@ future_risks = detect_future_risks(forecast_result, threshold=threshold_for_fore
 
 print("\n===== HIGH-RISK FLIGHTS =====")
 print(future_risks[future_risks["RISK"]])
+
+# ----------------------------
+# Save outputs for downstream optimization or review
+# ----------------------------
+out_dir = "forecast_outputs"
+os.makedirs(out_dir, exist_ok=True)
+
+# create safe filename parts
+safe_route = ROUTE_TO_USE.replace("/", "_").replace(" ", "")
+safe_airline = AIRLINE_TO_USE.replace("/", "_").replace(" ", "")
+ts = pd.Timestamp.now().strftime("%Y%m%d_%H%M%S")
+
+forecast_path = f"{out_dir}/forecast_{safe_airline}_{safe_route}_{ts}.csv"
+risks_path = f"{out_dir}/risks_{safe_airline}_{safe_route}_{ts}.csv"
+
+try:
+    forecast_result.to_csv(forecast_path, index=False)
+    future_risks.to_csv(risks_path, index=False)
+    print(f"\nSaved forecast CSV: {forecast_path}")
+    print(f"Saved risks CSV: {risks_path}")
+except Exception as e:
+    print(f"Failed to save CSVs: {e}")
