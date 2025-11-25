@@ -9,6 +9,26 @@ from prophet import Prophet
 # 1.1 LOAD HISTORICAL FLIGHT DATA (STRICT MODE)
 # ==============================
 
+#syntax to let user upload csv
+"""
+from tkinter import Tk
+from tkinter.filedialog import askopenfilename
+# Hide the Tkinter root window
+Tk().withdraw()
+
+# File selection dialog
+file_path = askopenfilename(
+    title="Select CSV file with flights delay data",
+    filetypes=[("CSV Files", "*.csv")]
+)
+
+if not file_path:
+    raise SystemExit("No file selected. Exiting...")
+
+# Load the CSV
+user_df = pd.read_csv(file_path)
+"""
+
 file_path = "flight filtered_column.csv"
 df = pd.read_csv(file_path)
 
