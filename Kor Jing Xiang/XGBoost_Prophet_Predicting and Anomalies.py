@@ -9,7 +9,7 @@ from prophet import Prophet
 # 1.1 LOAD HISTORICAL FLIGHT DATA (STRICT MODE)
 # ==============================
 
-file_path = "flight_data_selected_columns_clean.csv"
+file_path = "flight filtered_column.csv"
 df = pd.read_csv(file_path)
 
 #  FIX: Normalize column names ONCE
@@ -315,7 +315,7 @@ if not file_path_future:
 user_df = pd.read_csv(file_path_future)
 """
 #syntax to test
-file_path_future = r"flight_data_sample_reduced_rows.csv"
+file_path_future = r"filtered_500_rows.csv"
 
 # Load test CSV
 user_df = pd.read_csv(file_path_future)
