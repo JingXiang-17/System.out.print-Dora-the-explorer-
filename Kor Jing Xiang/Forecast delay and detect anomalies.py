@@ -67,7 +67,7 @@ def preprocess_and_engineer(df_raw: pd.DataFrame) -> pd.DataFrame:
         if col not in df_proc.columns:
             df_proc[col] = 0.0
 
-    # 2. Reconstruct categorical/route columns for filtering and display
+    # 2. Reconstruct categorical/route columns for filtering ant display
     
     # Check for existence and apply aggressive cleaning/upper-casing
     airline_col = df_proc.get('MARKETING_AIRLINE', pd.Series(''))
@@ -285,23 +285,40 @@ def interactive_filter(df: pd.DataFrame):
 
 
 def flag_anomalies(df_pred: pd.DataFrame) -> pd.DataFrame:
-    """Flags anomalies based on user requirements."""
-    
-    neg_threshold = HIST_MEAN_DELAY - (RISK_NEG_K * HIST_STD_DELAY)
-    
-    # Flagging Logic: 1. Any positive delay (late); 2. Large negative delay (too early).
-    df_pred['RISK'] = np.where(df_pred['PREDICTED_DELAY'] > 0, True, 
-                       np.where(df_pred['PREDICTED_DELAY'] < neg_threshold, True, False))
+    """Flags anomalies so that:
+    - Positive predicted delays are always flagged (`RISK=True`) and categorized
+      into `RISK_LEVEL` = LOW / MEDIUM / HIGH using minute thresholds.
+    - Negative predicted delays are left unchanged (not flagged).
+    """
 
-    # Generate message
+    # Risk thresholds (minutes)
+    LOW_THRESH = 15.0   # 0 < delay <= 15 -> LOW
+    MED_THRESH = 60.0   # 15 < delay <= 60 -> MEDIUM
+
+    # Initialize columns
+    df_pred['RISK'] = False
+    df_pred['RISK_LEVEL'] = ""
+
+    # Mask for positive (late) predictions
+    pos_mask = df_pred['PREDICTED_DELAY'] > 0
+
+    # Flag all positive delays
+    df_pred.loc[pos_mask, 'RISK'] = True
+
+    # Assign risk levels for positives
+    df_pred.loc[pos_mask & (df_pred['PREDICTED_DELAY'] <= LOW_THRESH), 'RISK_LEVEL'] = 'LOW'
+    df_pred.loc[pos_mask & (df_pred['PREDICTED_DELAY'] > LOW_THRESH) & \
+                  (df_pred['PREDICTED_DELAY'] <= MED_THRESH), 'RISK_LEVEL'] = 'MEDIUM'
+    df_pred.loc[pos_mask & (df_pred['PREDICTED_DELAY'] > MED_THRESH), 'RISK_LEVEL'] = 'HIGH'
+
+    # Generate message: include risk level for positives, otherwise a neutral message
     def generate_message(row):
         pred = row['PREDICTED_DELAY']
-        if pred > 0:
-            return f"Predicted DELAY of +{pred:.1f} min (High Risk)."
-        elif pred < neg_threshold:
-            return f"Predicted early arrival of {pred:.1f} min (Extreme Anomaly)."
+        if row['RISK']:
+            level = row['RISK_LEVEL'] if row['RISK_LEVEL'] else 'UNKNOWN'
+            return f"Predicted DELAY of +{pred:.1f} min ({level} Risk)."
         else:
-            return f"Predicted arrival: {pred:.1f} min (Normal)."
+            return f"Predicted arrival: {pred:.1f} min (No Risk)."
 
     df_pred['MESSAGE'] = df_pred.apply(generate_message, axis=1)
     return df_pred
