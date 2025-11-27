@@ -1,0 +1,11 @@
+flight_id,date_of_flight,scheduled_arrival,predicted_delay,risk,weather,crew_timeout,fuel
+DL101,2025-11-27,14:30,22.3,True,True,False,True
+DL102,2025-11-27,15:10,40.0,True,False,False,False
+DL103,2025-11-27,15:45,23.2,True,False,True,False
+DL104,2025-11-27,16:20,-1.7,False,False,False,False
+DL105,2025-11-27,17:05,6.6,False,False,False,True
+DL106,2025-11-27,18:00,12.4,True,True,True,False
+DL107,2025-11-27,18:45,3.1,False,False,False,False
+DL108,2025-11-27,19:30,51.5,True,True,False,True
+DL109,2025-11-27,20:00,9.7,False,False,False,False
+DL110,2025-11-27,20:50,28.9,True,False,True,False
