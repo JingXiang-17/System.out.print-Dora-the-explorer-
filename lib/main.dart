@@ -6,6 +6,9 @@ import 'package:csv/csv.dart';
 import 'package:file_picker/file_picker.dart';
 import 'package:flutter/material.dart';
 
+import 'dart:convert';
+import 'package:http/http.dart' as http;
+
 void main() {
   runApp(const RunwayApp());
 }
@@ -40,68 +43,15 @@ String getVal(Map<String, String> row, String key) {
 }
 
 String getOrigin(Map<String, String> r) {
-  final candidates = [
-    'ORIGIN',
-    'ORIG',
-    'SOURCE',
-    'DEPARTURE',
-    'DEPART',
-    'FROM',
-    'ORIGIN_AIRPORT',
-    'ORIGIN_CITY',
-  ];
-  for (final c in candidates) {
-    final v = getVal(r, c);
-    if (v.isNotEmpty) return v;
-  }
-  return '';
+  return getVal(r, 'ORIGIN');
 }
 
 String getDestination(Map<String, String> r) {
-  // IMPORTANT: we will prioritize DESTINATION_AIRPORT per your request
-  final candidates = [
-    'DESTINATION_AIRPORT',
-    'DEST',
-    'DEST_AIRPORT',
-    'DEST_CITY',
-    'ARRIVAL',
-    'TO',
-  ];
-  for (final c in candidates) {
-    final v = getVal(r, c);
-    if (v.isNotEmpty) return v;
-  }
-  return '';
+  return getVal(r, 'DEST');
 }
 
 String getFlightTail(Map<String, String> r) {
-  final tailKeys = [
-    'TAIL_NUMBER',
-    'TAIL',
-    'TAIL_NO',
-    'TAILNUM',
-    'TAIL_NUM',
-    'N_NUMBER',
-    'REG',
-    'REGISTRATION',
-  ];
-  for (final k in tailKeys) {
-    final v = getVal(r, k);
-    if (v.isNotEmpty) return v;
-  }
-  // fallback to flight number fields
-  final fkeys = [
-    'MKT_CARRIER_FL_NUM',
-    'FLIGHT_NUMBER',
-    'FL_NUM',
-    'FLT_NO',
-    'FLIGHT',
-  ];
-  for (final k in fkeys) {
-    final v = getVal(r, k);
-    if (v.isNotEmpty) return v;
-  }
-  return '';
+  return getVal(r, 'TAIL_NUMBER');
 }
 
 /* =========================
@@ -176,6 +126,37 @@ class Dashboard extends StatefulWidget {
 }
 
 class _DashboardState extends State<Dashboard> {
+  final String apiUrl =
+      "https://unreportorial-celestially-cherlyn.ngrok-free.dev/predict-csv";
+
+  // main.dart in _DashboardState
+  // ...
+
+  // Change return type to return the entire Map, not just a double
+  Future<Map<String, dynamic>?> getPrediction(
+    List<Map<String, dynamic>> input,
+  ) async {
+    try {
+      final response = await http.post(
+        Uri.parse(apiUrl),
+        headers: {"Content-Type": "application/json"},
+        body: jsonEncode(input), // ⚠️ MODIFICATION 2: jsonEncode the list
+      );
+
+      if (response.statusCode == 200) {
+        final data = jsonDecode(response.body);
+        // Return the full JSON map received from the backend
+        return data as Map<String, dynamic>;
+      } else {
+        print('Failed with status: ${response.statusCode}');
+        return null;
+      }
+    } catch (e) {
+      print('Error: $e');
+      return null;
+    }
+  }
+
   bool csvUploaded = false;
   List<String> headers = [];
   List<Map<String, String>> rows = [];
@@ -248,13 +229,7 @@ class _DashboardState extends State<Dashboard> {
       'DESTINATION_AIRPORT',
     ]; // placeholder, but not airline - we'll look for carrier fields first
     // more appropriate airline keys:
-    final carrierKeys = [
-      'MKT_UNIQUE_CARRIER',
-      'CARRIER',
-      'AIRLINE',
-      'OP_UNIQUE_CARRIER',
-      'OP_CARRIER',
-    ];
+    final carrierKeys = ['MKT_UNIQUE_CARRIER', 'OP_UNIQUE_CARRIER'];
     for (final r in rows) {
       for (final k in carrierKeys) {
         final v = getVal(r, k);
@@ -269,7 +244,7 @@ class _DashboardState extends State<Dashboard> {
     // Destinations: COUNT UNIQUE values from DESTINATION_AIRPORT column specifically (case-insensitive)
     final dests = <String>{};
     for (final r in rows) {
-      final d = getVal(r, 'DESTINATION_AIRPORT');
+      final d = getVal(r, 'DEST');
       if (d.isNotEmpty) dests.add(d);
     }
     totalDestinations = dests.length;
@@ -525,7 +500,7 @@ class _DashboardState extends State<Dashboard> {
                       (csvUploaded &&
                           (selectedFlightTail != null ||
                               selectedFlightRoute != null))
-                      ? () {
+                      ? () async {
                           final selected = getSelectedRow();
                           if (selected == null) {
                             ScaffoldMessenger.of(context).showSnackBar(
@@ -537,17 +512,94 @@ class _DashboardState extends State<Dashboard> {
                             );
                             return;
                           }
-                          Navigator.push(
-                            context,
-                            MaterialPageRoute(
-                              builder: (context) => AnomalyPage(
-                                datasetRows: rows,
-                                flightRow: selected,
-                              ),
+
+                          // 1. Create the input map based on the required API structure
+                          Map<String, dynamic> rawInput = {
+                            "MARKETING_AIRLINE": getVal(
+                              selected,
+                              'MKT_UNIQUE_CARRIER',
                             ),
-                          );
+                            "ORIGIN_AIRPORT_CODE": getVal(selected, 'ORIGIN'),
+                            "DEST_AIRPORT_CODE": getVal(selected, 'DEST'),
+                            "ORIGIN_STATE": getVal(
+                              selected,
+                              'ORIGIN_STATE_ABR',
+                            ),
+                            "DEST_STATE": getVal(selected, 'DEST_STATE_ABR'),
+                            "DEPARTURE_BLOCK": getVal(selected, 'DEP_BLOCK'),
+                            "ARRIVAL_BLOCK": getVal(selected, 'ARR_BLOCK'),
+                            // Use int.tryParse for the integer fields
+                            "CRS_DEP_TIME":
+                                int.tryParse(
+                                  getVal(selected, 'CRS_DEP_TIME') ?? '0',
+                                ) ??
+                                0,
+                            "MONTH":
+                                int.tryParse(
+                                  getVal(selected, 'MONTH') ?? '0',
+                                ) ??
+                                0,
+                            "DAY_OF_WEEK":
+                                int.tryParse(
+                                  getVal(selected, 'DAY_OF_WEEK') ?? '0',
+                                ) ??
+                                0,
+                            "TAIL_NUMBER": getVal(selected, 'TAIL_NUMBER'),
+                          };
+
+                          // 2. Wrap the input in a list, as required by the API
+                          final List<Map<String, dynamic>> apiPayload = [
+                            rawInput,
+                          ];
+
+                          // 3. Call the prediction API
+                          Map<String, dynamic>? predictedData =
+                              await getPrediction(apiPayload);
+
+                          // 4. Handle the API response: Store results and navigate
+                          if (predictedData != null) {
+                            // Store API data into the selected flight row
+                            selected['PREDICTED_TOTAL_DELAY'] =
+                                predictedData['total_predicted_delay_min']
+                                    ?.toString() ??
+                                '0';
+                            selected['PREDICTED_WEATHER_DELAY'] =
+                                predictedData['weather_delay_min']
+                                    ?.toString() ??
+                                '0';
+                            selected['PREDICTED_CARRIER_DELAY'] =
+                                predictedData['carrier_delay_min']
+                                    ?.toString() ??
+                                '0';
+                            selected['PREDICTED_SECURITY_DELAY'] =
+                                predictedData['security_delay_min']
+                                    ?.toString() ??
+                                '0';
+
+                            // Navigate to AnomalyPage
+                            Navigator.push(
+                              context,
+                              MaterialPageRoute(
+                                builder: (context) => AnomalyPage(
+                                  datasetRows: rows,
+                                  flightRow: selected,
+                                ),
+                              ),
+                            );
+                          } else {
+                            // Show error message if API call failed
+                            ScaffoldMessenger.of(context).showSnackBar(
+                              const SnackBar(
+                                content: Text(
+                                  'Prediction failed. Please check the API/server logs.',
+                                ),
+                              ),
+                            );
+                          }
                         }
                       : null,
+
+                  // 💚 PASTE END
                   style: ElevatedButton.styleFrom(
                     padding: const EdgeInsets.symmetric(
                       vertical: 16,
@@ -560,7 +612,7 @@ class _DashboardState extends State<Dashboard> {
             ),
             const SizedBox(height: 30),
             const Text(
-              'CSV Preview (first 20 rows)',
+              'CSV Preview',
               style: TextStyle(fontWeight: FontWeight.bold),
             ),
             const SizedBox(height: 8),
@@ -717,17 +769,25 @@ class AnomalyPage extends StatelessWidget {
     final weatherRisk = computeWeatherRisk(flightRow);
     final delayRisk = computeDelayRisk(flightRow);
 
-    final weatherDelay = int.tryParse(getVal(flightRow, 'WEATHER_DELAY')) ?? 0;
-    final depDelay = int.tryParse(getVal(flightRow, 'DEP_DELAY')) ?? 0;
+    final predictedDelay =
+        double.tryParse(flightRow['PREDICTED_TOTAL_DELAY'] ?? '0')?.round() ??
+        0;
+    final weatherDelay =
+        double.tryParse(flightRow['PREDICTED_WEATHER_DELAY'] ?? '0')?.round() ??
+        0;
+    final carrierDelay =
+        double.tryParse(flightRow['PREDICTED_CARRIER_DELAY'] ?? '0')?.round() ??
+        0;
     final securityDelay =
-        int.tryParse(getVal(flightRow, 'SECURITY_DELAY')) ?? 0;
+        double.tryParse(
+          flightRow['PREDICTED_SECURITY_DELAY'] ?? '0',
+        )?.round() ??
+        0;
 
     final fuelPercent = computeFuelPercent(flightRow);
     final fuelRisk = (fuelPercent < 25)
         ? 'high'
         : (fuelPercent < 40 ? 'medium' : 'low');
-
-    final predictedDelay = weatherDelay + depDelay + securityDelay;
 
     // Build times
     final schArrRaw = getVal(flightRow, 'CRS_ARR_TIME');
@@ -841,15 +901,11 @@ class AnomalyPage extends StatelessWidget {
                       Text("Flight Tail Number: $flightId"),
                       const SizedBox(height: 6),
                       Text(
-                        "Flight Route: ${getVal(flightRow, 'ORIGIN_AIRPORT')} → ${getVal(flightRow, 'DESTINATION_AIRPORT')}",
+                        "Flight Route: ${getVal(flightRow, 'ORIGIN')} → ${getVal(flightRow, 'DEST')}",
                       ),
                       const SizedBox(height: 6),
                       Text(
-                        "Forecasted delay: ${weatherDelay >= 60
-                            ? '≥ 60 min'
-                            : weatherDelay > 0
-                            ? '$weatherDelay min'
-                            : 'No major forecast'}",
+                        "Forecasted delay: ${weatherDelay > 0 ? '$weatherDelay min' : 'No major forecast'}",
                         style: const TextStyle(fontWeight: FontWeight.bold),
                       ),
                     ],
@@ -866,15 +922,11 @@ class AnomalyPage extends StatelessWidget {
                       Text("Flight Tail Number: $flightId"),
                       const SizedBox(height: 6),
                       Text(
-                        "Flight Route: ${getVal(flightRow, 'ORIGIN_AIRPORT')} → ${getVal(flightRow, 'DESTINATION_AIRPORT')}",
+                        "Flight Route: ${getVal(flightRow, 'ORIGIN')} → ${getVal(flightRow, 'DEST')}",
                       ),
                       const SizedBox(height: 6),
                       Text(
-                        "Forecasted delay: ${depDelay >= 60
-                            ? '≥ 60 min'
-                            : depDelay >= 15
-                            ? '$depDelay min'
-                            : 'No major forecast'}",
+                        "Forecasted delay: ${carrierDelay > 0 ? '$carrierDelay min' : 'No major forecast'}",
                         style: const TextStyle(fontWeight: FontWeight.bold),
                       ),
                     ],
@@ -893,15 +945,11 @@ class AnomalyPage extends StatelessWidget {
                       Text("Flight Tail Number: $flightId"),
                       const SizedBox(height: 6),
                       Text(
-                        "Flight Route: ${getVal(flightRow, 'ORIGIN_AIRPORT')} → ${getVal(flightRow, 'DESTINATION_AIRPORT')}",
+                        "Flight Route: ${getVal(flightRow, 'ORIGIN')} → ${getVal(flightRow, 'DEST')}",
                       ),
                       const SizedBox(height: 6),
                       Text(
-                        "Delay Forecast: ${securityDelay >= 60
-                            ? '≥ 60 min'
-                            : securityDelay > 0
-                            ? '$securityDelay min'
-                            : 'No major forecast'}",
+                        "Forecasted delay: ${securityDelay > 0 ? '$securityDelay min' : 'No major forecast'}",
                         style: const TextStyle(fontWeight: FontWeight.bold),
                       ),
                     ],
