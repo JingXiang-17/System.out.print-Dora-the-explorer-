@@ -16,3 +16,6 @@ For help getting started with Flutter development, view the
 samples, guidance on mobile development, and a full API reference.
 
 ## Hackathon
+
+Slide:
+https://www.canva.com/design/DAG52vcYu6U/BtEhIqxSA6ouiyFlQyD0-A/edit?utm_content=DAG52vcYu6U&utm_campaign=designshare&utm_medium=link2&utm_source=sharebutton

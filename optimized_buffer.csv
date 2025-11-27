@@ -1,0 +1,7 @@
+flight,predicted_delay,buffer_minutes
+AA101,30,5.0
+DL202,45,5.0
+UA303,10,0.0
+SW404,20,5.0
+BA505,5,0.0
+AF606,25,5.0
