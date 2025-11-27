@@ -8,7 +8,7 @@ from tkinter import Tk, filedialog
 # --- CONFIGURATION (Must match training configuration) ---
 TARGET_COLUMNS = ['CARRIER_DELAY', 'SECURITY_DELAY', 'WEATHER_DELAY']
 MODEL_FILENAME = 'flight_delay_predictor.joblib'
-USER_INPUT_FILE = '/kaggle/working/user_input_flight_data_with_flightNumber.csv' 
+USER_INPUT_FILE = 'user_input_flight_data_with_flightNumber.csv' 
 TAIL_NUMBER_COL = 'TAIL_NUMBER' # <-- NEW: Identifier column to preserve
 
 # Columns that MUST be present and converted to category for XGBoost inference
@@ -157,6 +157,34 @@ if __name__ == "__main__":
     try:
         df_raw = pd.read_csv(file_path)
         print(f"Successfully loaded data from {file_path}.")
+        # --- Summary counts based on uploaded file ---
+        total_rows = len(df_raw)
+        print(f"Total rows in uploaded file: {total_rows}")
+
+        # Flights under supervision: count unique tail numbers when available
+        if TAIL_NUMBER_COL in df_raw.columns:
+            unique_tails = int(df_raw[TAIL_NUMBER_COL].nunique())
+            print(f"Number of flights under supervision (unique {TAIL_NUMBER_COL}): {unique_tails}")
+        else:
+            print(f"Column '{TAIL_NUMBER_COL}' not found; cannot compute unique tail numbers.")
+
+        # Number of unique destinations (try common column names)
+        dest_candidates = ['DEST', 'DEST_AIRPORT_CODE', 'DEST_AIRPORT_ID']
+        dest_col = next((c for c in dest_candidates if c in df_raw.columns), None)
+        if dest_col:
+            unique_dests = int(df_raw[dest_col].nunique())
+            print(f"Number of unique destinations ({dest_col}): {unique_dests}")
+        else:
+            print("No destination column found to compute unique destinations.")
+
+        # Number of unique airlines (try common column names)
+        airline_candidates = ['MARKETING_AIRLINE', 'MKT_UNIQUE_CARRIER', 'OPERATING_AIRLINE', 'OP_UNIQUE_CARRIER']
+        airline_col = next((c for c in airline_candidates if c in df_raw.columns), None)
+        if airline_col:
+            unique_airlines = int(df_raw[airline_col].nunique())
+            print(f"Number of unique airlines ({airline_col}): {unique_airlines}")
+        else:
+            print("No airline column found to compute unique airlines.")
     except Exception as e:
         print(f"\nERROR reading CSV: {e}")
         exit()
@@ -209,6 +237,31 @@ if __name__ == "__main__":
         out_path = os.path.join(out_dir, 'predicted flight delay.csv')
         predictions_df.to_csv(out_path, index=False)
         print(f"\nSaved predictions CSV to: {out_path}")
+        # --- Compute per-factor risk labels and save anomalies CSV ---
+        def risk_label(value):
+            av = abs(value)
+            if av < 15:
+                return 'LOW'
+            if av <= 60:
+                return 'MEDIUM'
+            return 'HIGH'
+
+        anomalies_df = pd.DataFrame()
+        # Preserve identifier if present
+        if TAIL_NUMBER_COL in predictions_df.columns:
+            anomalies_df[TAIL_NUMBER_COL] = predictions_df[TAIL_NUMBER_COL]
+
+        for col in TARGET_COLUMNS:
+            risk_col = f"{col}_RISK"
+            anomalies_df[risk_col] = predictions_df[col].apply(risk_label)
+
+        anomalies_path = os.path.join(out_dir, 'flag anomalies.csv')
+        anomalies_df.to_csv(anomalies_path, index=False)
+        print(f"Saved anomalies CSV to: {anomalies_path}")
+
+        # Print anomalies to terminal (same style as predictions)
+        print("\n--- Flagged Anomalies ---")
+        print(anomalies_df)
         
     except FileNotFoundError:
         print(f"\nERROR: Model file '{MODEL_FILENAME}' not found. Please train and save the model first.")
